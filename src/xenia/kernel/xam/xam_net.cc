@@ -510,7 +510,7 @@ dword_result_t NetDll_WSARecvFrom_entry(
     dword_t caller, dword_t socket_handle, pointer_t<XWSABUF> buffers,
     dword_t num_buffers, lpdword_t num_bytes_recv_ptr, lpdword_t flags_ptr,
     pointer_t<XSOCKADDR_IN> from_ptr, lpdword_t fromlen_ptr,
-    pointer_t<XWSAOVERLAPPED> overlapped_ptr, lpvoid_t completion_routine_ptr) {
+    pointer_t<XWSAOVERLAPPED> overlapped_ptr, lpvoid_t /*completion_routine_ptr*/) {
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
   if (!socket) {
@@ -519,42 +519,34 @@ dword_result_t NetDll_WSARecvFrom_entry(
   }
 
 #ifdef XE_PLATFORM_WIN32
-  // Ensure we never get stuck in WSAECONNRESET limbo in local UDP mode.
+  // Keep UDP recv from dying on ICMP Port Unreachable while we’re in local modes.
   if (cvars::network_mode >= 2) {
     DisableUdpConnReset(socket->native_handle());
   }
 #endif
 
-  int ret;
-  int retry_count = 3;
-  do {
-    ret = socket->WSARecvFrom(buffers, num_buffers, num_bytes_recv_ptr,
-                              flags_ptr, from_ptr, fromlen_ptr, overlapped_ptr);
-    if (ret < 0) {
-      auto err = socket->GetLastWSAError();
-      if (err == static_cast<uint32_t>(X_WSAError::X_WSAEWOULDBLOCK) ||
-          err == static_cast<uint32_t>(X_WSAError::X_WSA_IO_PENDING)) {
-        if (err != 0) XELOGI("WSARecvFrom Unhandled error occurred: {}", err);
-        XThread::SetLastError(err);
-        return ret;
-      } else if (err != static_cast<uint32_t>(X_WSAError::X_WSAENOTSOCK) &&
-                 err != static_cast<uint32_t>(
-                            X_WSAError::X_WSA_INVALID_PARAMETER)) {
-        XELOGI("Non-critical error occurred: {}", err);
-        XThread::SetLastError(0);
-      } else {
-        XELOGI("Unhandled error occurred: {}", err);
-        XThread::SetLastError(err);
-      }
+  // Hand straight to XSocket’s FSM-aware WSA path.
+  int ret = socket->WSARecvFrom(buffers, num_buffers, num_bytes_recv_ptr,
+                                flags_ptr, from_ptr, fromlen_ptr, overlapped_ptr);
+
+  if (ret < 0) {
+    auto err = socket->GetLastWSAError();
+    // EWOULDBLOCK / IO_PENDING are expected in non-blocking / overlapped flows.
+    if (err == static_cast<uint32_t>(X_WSAError::X_WSAEWOULDBLOCK) ||
+        err == static_cast<uint32_t>(X_WSAError::X_WSA_IO_PENDING)) {
+      XThread::SetLastError(err);
       return ret;
     }
-    break;
-  } while (--retry_count > 0);
+    // Otherwise bubble the error up.
+    XThread::SetLastError(err);
+    return ret;
+  }
 
+  // Success (immediate, likely satisfied from the FSM recv ring).
   XThread::SetLastError(0);
 
-  if (!cvars::log_mask_ips && from_ptr) {
-    XELOGD("NetDll_WSARecvFrom: {} bytes from {}.{}.{}.{}",
+  if (!cvars::log_mask_ips && from_ptr && num_bytes_recv_ptr) {
+    XELOGD("NetDll_WSARecvFrom (FSM): {} bytes from {}.{}.{}.{}",
            static_cast<uint32_t>(*num_bytes_recv_ptr),
            from_ptr->address_ip.S_un.S_un_b.s_b1,
            from_ptr->address_ip.S_un.S_un_b.s_b2,
@@ -593,9 +585,7 @@ dword_result_t NetDll_WSASendTo_entry(
     dword_t caller, dword_t socket_handle, pointer_t<XWSABUF> buffers,
     dword_t num_buffers, lpdword_t num_bytes_sent, dword_t flags,
     pointer_t<XSOCKADDR_IN> to_ptr, dword_t to_len,
-    pointer_t<XWSAOVERLAPPED> overlapped, lpvoid_t completion_routine) {
-  assert(!completion_routine);
-
+    pointer_t<XWSAOVERLAPPED> overlapped, lpvoid_t /*completion_routine*/) {
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
   if (!socket) {
@@ -604,91 +594,44 @@ dword_result_t NetDll_WSASendTo_entry(
   }
 
 #ifdef XE_PLATFORM_WIN32
-  // In local UDP mode, proactively disable UDP connreset on this socket.
+  // Avoid UDP connreset surprises on local UDP flows.
   if (cvars::network_mode >= 2) {
     DisableUdpConnReset(socket->native_handle());
   }
 #endif
 
-  if (overlapped) {
-    int ret;
-    int retry_count = 3;
-    do {
-      ret = socket->WSASendTo(buffers, num_buffers, num_bytes_sent, flags,
+  // Always go through XSocket’s WSA path — it prefers the FSM send ring and
+  // completes overlapped immediately when enqueued.
+  int ret = socket->WSASendTo(buffers, num_buffers, num_bytes_sent, flags,
                               to_ptr, to_len, overlapped);
-      if (ret == SOCKET_ERROR) {
-        auto err = WSAGetLastError();
 
-        if (err == static_cast<uint32_t>(X_WSAError::X_WSAEWOULDBLOCK) ||
-            err == static_cast<uint32_t>(X_WSAError::X_WSA_IO_PENDING)) {
-          XThread::SetLastError(err);
-          return ret;
-        } else if (err != static_cast<uint32_t>(X_WSAError::X_WSAENOTSOCK) &&
-                   err != static_cast<uint32_t>(
-                              X_WSAError::X_WSA_INVALID_PARAMETER)) {
-          XELOGI("Non-critical error occurred: {}", err);
-          XThread::SetLastError(0);
-        } else {
-          XELOGI("WSASendTo Unhandled error occurred: {}", err);
-          XThread::SetLastError(err);
-        }
-        return ret;
-      }
-      break;
-    } while (--retry_count > 0);
-
-    XThread::SetLastError(0);
-    XELOGI("NetDll_WSASendTo: Send {} bytes", (uint32_t)*num_bytes_sent);
-
-    if (overlapped->event_handle) {
-      xboxkrnl::xeNtSetEvent(overlapped->event_handle, nullptr);
+  if (ret < 0) {
+    auto err = socket->GetLastWSAError();
+    // EWOULDBLOCK / IO_PENDING are expected for non-blocking / overlapped.
+    if (err == static_cast<uint32_t>(X_WSAError::X_WSAEWOULDBLOCK) ||
+        err == static_cast<uint32_t>(X_WSAError::X_WSA_IO_PENDING)) {
+      XThread::SetLastError(err);
+      return ret;
     }
+    // Otherwise, surface the error.
+    XELOGI("NetDll_WSASendTo (FSM) error: {}", err);
+    XThread::SetLastError(err);
     return ret;
   }
 
-  // Combine buffers (no scatter/gather support here).
-  std::vector<uint8_t> combined_buffer_mem;
-  uint32_t combined_buffer_size = 0;
-  uint32_t combined_buffer_offset = 0;
+  // Success (immediate ring enqueue or socket send).
+  XThread::SetLastError(0);
 
-  for (uint32_t i = 0; i < num_buffers; i++) {
-    combined_buffer_size += buffers[i].len;
-    combined_buffer_mem.resize(combined_buffer_size);
-    uint8_t* combined_buffer = combined_buffer_mem.data();
-
-    std::memcpy(combined_buffer + combined_buffer_offset,
-                kernel_memory()->TranslateVirtual(buffers[i].buf_ptr),
-                buffers[i].len);
-    combined_buffer_offset += buffers[i].len;
-  }
-
-  const int result = socket->SendTo(
-      combined_buffer_mem.data(), combined_buffer_size, flags, to_ptr, to_len);
-
-  if (result == -1) {
-#ifdef XE_PLATFORM_WIN32
-    auto err = socket->GetLastWSAError();
-    if (cvars::network_mode >= 2 && err == WSAECONNRESET) {
-      // Swallow the reset once so we can keep using this socket.
-      XThread::SetLastError(0);
-      if (num_bytes_sent) *num_bytes_sent = 0;
-      return 0;
-    }
-#endif
-    XThread::SetLastError(socket->GetLastWSAError());
-    return result;
-  } else if (result != -1 && to_ptr && !cvars::log_mask_ips) {
-    XELOGD("NetDll_WSASendTo: sent {} bytes to {}.{}.{}.{}", result,
-           to_ptr->address_ip.S_un.S_un_b.s_b1,
+  if (!cvars::log_mask_ips && to_ptr && num_bytes_sent) {
+    XELOGD("NetDll_WSASendTo (FSM): sent {} bytes to {}.{}.{}.{}",
+           (uint32_t)*num_bytes_sent, to_ptr->address_ip.S_un.S_un_b.s_b1,
            to_ptr->address_ip.S_un.S_un_b.s_b2,
            to_ptr->address_ip.S_un.S_un_b.s_b3,
            to_ptr->address_ip.S_un.S_un_b.s_b4);
   }
 
-  if (num_bytes_sent) {
-    *num_bytes_sent = result;
-  }
-  return 0;
+  // `WSASendTo` semantics: return 0 on success, SOCKET_ERROR on failure.
+  return ret;
 }
 DECLARE_XAM_EXPORT1(NetDll_WSASendTo, kNetworking, kImplemented);
 
