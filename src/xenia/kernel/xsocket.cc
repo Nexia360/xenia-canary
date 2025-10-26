@@ -32,7 +32,16 @@ static std::unordered_map<XSocket*, std::future<void>> g_fsm_tasks;
 // ==============================================================================
 
 void XSocket::SetRecvCallback(std::function<void(const uint8_t*, uint32_t, const sockaddr*, int)> callback) {
-  recv_callback_ = std::move(callback);
+  recv_callback_ = [this](const uint8_t* data, uint32_t length, const sockaddr* addr, int addrlen) {
+    NetPacket pkt{};
+    pkt.len = static_cast<uint16_t>(length);
+    std::memcpy(pkt.data, data, length);
+    if (addr) {
+      std::memcpy(&pkt.addr, addr, sizeof(sockaddr));
+      pkt.addrlen = addrlen;
+    }
+    recv_ring_.push(pkt);
+  };
 }
 
 XSocket::XSocket(KernelState* kernel_state)
@@ -713,6 +722,50 @@ int XSocket::WSARecvFrom(XWSABUF* buffers, uint32_t num_buffers,
     return -1;
   }
 
+  // Check the ring buffer first
+  uint32_t total_cap = 0;
+  for (uint32_t i = 0; i < num_buffers; ++i) total_cap += buffers[i].len;
+
+  sockaddr sa{};
+  int salen = sizeof(sockaddr);
+  uint8_t* first_buf =
+      reinterpret_cast<uint8_t*>(
+          kernel_state()->memory()->TranslateVirtual(buffers[0].buf_ptr));
+  uint32_t got = 0;
+
+  if (TryDequeueRecv_(first_buf, buffers[0].len, &got,
+                      from_ptr ? &sa : nullptr, from_ptr ? &salen : nullptr)) {
+    // Copy into multiple buffers if needed.
+    if (got > buffers[0].len) {
+      uint32_t off = buffers[0].len;
+      for (uint32_t i = 1; i < num_buffers && off < got; ++i) {
+        uint8_t* dst = reinterpret_cast<uint8_t*>(
+            kernel_state()->memory()->TranslateVirtual(buffers[i].buf_ptr));
+        uint32_t n = std::min<uint32_t>(buffers[i].len, got - off);
+        std::memcpy(dst, first_buf + off, n);
+        off += n;
+      }
+    }
+
+    if (from_ptr) {
+      from_ptr->to_guest(&sa);
+      if (fromlen_ptr) *fromlen_ptr = salen;
+    }
+
+    if (num_bytes_recv_ptr) *num_bytes_recv_ptr = got;
+    if (overlapped_ptr) {
+      overlapped_ptr->internal = got;
+      overlapped_ptr->internal_high = 0;
+      overlapped_ptr->offset_high |= WSAInfo::complete;
+      overlapped_ptr->offset = *flags_ptr;
+      if (overlapped_ptr->event_handle) {
+        xboxkrnl::xeNtSetEvent(overlapped_ptr->event_handle, nullptr);
+      }
+    }
+    SetLastWSAError((X_WSAError)0);
+    return 0;  // immediate success
+  }
+
   // FSM-first: try to satisfy from recv ring immediately.
   uint32_t total_cap = 0;
   for (uint32_t i = 0; i < num_buffers; ++i) total_cap += buffers[i].len;
@@ -942,6 +995,27 @@ bool XSocket::WSAGetOverlappedResult(XWSAOVERLAPPED* overlapped_ptr,
   if (!overlapped_ptr || !bytes_transferred || !flags_ptr) {
     SetLastWSAError(X_WSAError::X_WSA_INVALID_PARAMETER);
     return false;
+  }
+
+  // Check the ring buffer first
+  if (overlapped_ptr->offset_high & WSAInfo::recvfrom_flag) {
+    std::unique_lock lock(receive_mutex_);
+
+    if (!(overlapped_ptr->offset_high & WSAInfo::complete) ||
+        overlapped_ptr->internal_high ==
+            (uint32_t)X_WSAError::X_WSAEWOULDBLOCK) {
+      if (wait) {
+        receive_cv_.wait(lock);
+      } else {
+        SetLastWSAError(X_WSAError::X_WSA_IO_INCOMPLETE);
+        return false;
+      }
+    }
+
+    *bytes_transferred = overlapped_ptr->internal;
+    *flags_ptr = overlapped_ptr->offset;
+
+    receive_active_overlapped_ = nullptr;
   }
 
   if (overlapped_ptr->offset_high & WSAInfo::sendto_flag) {
