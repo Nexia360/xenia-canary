@@ -2,17 +2,20 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2015 Ben Vanik. All rights reserved.                             *
- * Released under the BSD license - see LICENSE in the root for more details. *
+ * Copyright 2015 Ben Vanik. All rights
+ * Reserved under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
 
 #ifndef XENIA_KERNEL_XSOCKET_H_
 #define XENIA_KERNEL_XSOCKET_H_
 
+#include <atomic>
+#include <condition_variable>
 #include <cstring>
 #include <future>
 #include <queue>
+#include <thread>
 
 #include "xenia/base/byte_order.h"
 #include "xenia/kernel/xobject.h"
@@ -67,7 +70,6 @@ struct XSOCKADDR_IN {
   const sockaddr to_host() const {
     sockaddr sa = {};
     std::memcpy(&sa, this, sizeof(sockaddr));
-
     sa.sa_family = xe::byte_swap(sa.sa_family);
     // port is already in correct endianness
     return sa;
@@ -222,8 +224,83 @@ class XSocket : public XObject {
   std::mutex receive_socket_mutex_;
   XWSAOVERLAPPED* receive_active_overlapped_ = nullptr;
 
-  int PushWSASendTo(bool wait, struct WSASendToData send_async_data);
+  // ========= New: Background FSM + lock-free rings (no public API changes) ===
+  // Simple SPSC/MPMC ring (power-of-two size) for small UDP packets.
+  template <typename T, size_t N>
+  class LockFreeRing {
+   public:
+    static_assert((N & (N - 1)) == 0, "N must be a power of two");
+    bool push(const T& v) {
+      size_t h = head_.load(std::memory_order_relaxed);
+      size_t n = (h + 1) & mask_;
+      if (n == tail_.load(std::memory_order_acquire)) return false;
+      buf_[h] = v;
+      head_.store(n, std::memory_order_release);
+      return true;
+    }
+    bool pop(T& out) {
+      size_t t = tail_.load(std::memory_order_relaxed);
+      if (t == head_.load(std::memory_order_acquire)) return false;
+      out = buf_[t];
+      tail_.store((t + 1) & mask_, std::memory_order_release);
+      return true;
+    }
+    bool empty() const {
+      return head_.load(std::memory_order_acquire) ==
+             tail_.load(std::memory_order_acquire);
+    }
+    void reset() {
+      tail_.store(0, std::memory_order_relaxed);
+      head_.store(0, std::memory_order_relaxed);
+    }
 
+   private:
+    static constexpr size_t mask_ = N - 1;
+    T buf_[N]{};
+    std::atomic<size_t> head_{0};
+    std::atomic<size_t> tail_{0};
+  };
+
+  struct NetPacket {
+    sockaddr addr{};
+    int      addrlen{0};
+    uint16_t len{0};
+    uint8_t  data[1500];  // Typical UDP MTU payload
+  };
+
+  enum class NetFsmState : uint8_t { Idle, Running, Stopping };
+
+  static constexpr size_t kRecvRingSize = 1024;
+  static constexpr size_t kSendRingSize = 1024;
+
+  LockFreeRing<NetPacket, kRecvRingSize> recv_ring_;
+  LockFreeRing<NetPacket, kSendRingSize> send_ring_;
+
+  std::thread net_thread_;
+  std::atomic<NetFsmState> fsm_state_{NetFsmState::Idle};
+  std::atomic<bool> fsm_wants_exit_{false};
+  bool fsm_started_{false};
+
+  std::mutex fsm_cv_mtx_;
+  std::condition_variable fsm_cv_;
+
+  // FSM lifecycle
+  void StartNetFsm_();
+  void StopNetFsm_();
+  void NetFsmLoop_();
+
+  // FSM actions
+  void FsmDoNetRecv_();
+  void FsmDoNetSend_();
+
+  // Client<->FSM helpers
+  bool TryEnqueueSend_(const uint8_t* buf, uint32_t len,
+                       const sockaddr* addr, int addrlen);
+  bool TryDequeueRecv_(uint8_t* buf, uint32_t buf_len, uint32_t* out_len,
+                       sockaddr* out_addr, int* out_addrlen);
+  // =========================================================================
+
+  int PushWSASendTo(bool wait, struct WSASendToData send_async_data);
   int PollWSARecvFrom(bool wait, struct WSARecvFromData data);
 
   void SetLastWSAError(X_WSAError) const;
