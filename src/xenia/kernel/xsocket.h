@@ -70,16 +70,16 @@ struct XSOCKADDR_IN {
   sockaddr_in to_host() const {
     sockaddr_in sa = {};
     sa.sin_family = xe::byte_swap(address_family);
-    sa.sin_port = address_port;
-    sa.sin_addr = address_ip;
+    sa.sin_port = xe::byte_swap(address_port);
+    sa.sin_addr.s_addr = xe::byte_swap(address_ip.s_addr);
     std::memcpy(sa.sin_zero, sa_zero, sizeof(sa_zero));
     return sa;
   }
 
   void to_guest(const sockaddr_in* host) {
     address_family = xe::byte_swap(host->sin_family);
-    address_port = host->sin_port;
-    address_ip = host->sin_addr;
+    address_port = xe::byte_swap(host->sin_port);
+    address_ip.s_addr = xe::byte_swap(host->sin_addr.s_addr);
     std::memcpy(sa_zero, host->sin_zero, sizeof(sa_zero));
   }
 };
