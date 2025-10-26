@@ -165,7 +165,9 @@ class XSocket : public XObject {
                 XSOCKADDR_IN* to_ptr, uint32_t to_len,
                 XWSAOVERLAPPED* overlapped_ptr);
 
-  void SetRecvCallback(std::function<void(const uint8_t*, uint32_t, const sockaddr*, int)> callback);
+  void SetRecvCallback(
+      std::function<void(const uint8_t*, uint32_t, const sockaddr*, int)>
+          callback);
   int WSARecvFrom(XWSABUF* buffers, uint32_t num_buffers,
                   xe::be<uint32_t>* num_bytes_recv_ptr,
                   xe::be<uint32_t>* flags_ptr, XSOCKADDR_IN* from_ptr,
@@ -264,9 +266,9 @@ class XSocket : public XObject {
 
   struct NetPacket {
     sockaddr addr{};
-    int      addrlen{0};
+    int addrlen{0};
     uint16_t len{0};
-    uint8_t  data[1500];  // Typical UDP MTU payload
+    uint8_t data[1500];  // Typical UDP MTU payload
   };
 
   enum class NetFsmState : uint8_t { Idle, Running, Stopping };
@@ -295,8 +297,8 @@ class XSocket : public XObject {
   void FsmDoNetSend_();
 
   // Client<->FSM helpers
-  bool TryEnqueueSend_(const uint8_t* buf, uint32_t len,
-                       const sockaddr* addr, int addrlen);
+  bool TryEnqueueSend_(const uint8_t* buf, uint32_t len, const sockaddr* addr,
+                       int addrlen);
   bool TryDequeueRecv_(uint8_t* buf, uint32_t buf_len, uint32_t* out_len,
                        sockaddr* out_addr, int* out_addrlen);
   // =========================================================================

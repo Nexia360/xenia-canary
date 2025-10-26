@@ -510,7 +510,8 @@ dword_result_t NetDll_WSARecvFrom_entry(
     dword_t caller, dword_t socket_handle, pointer_t<XWSABUF> buffers,
     dword_t num_buffers, lpdword_t num_bytes_recv_ptr, lpdword_t flags_ptr,
     pointer_t<XSOCKADDR_IN> from_ptr, lpdword_t fromlen_ptr,
-    pointer_t<XWSAOVERLAPPED> overlapped_ptr, lpvoid_t /*completion_routine_ptr*/) {
+    pointer_t<XWSAOVERLAPPED> overlapped_ptr,
+    lpvoid_t /*completion_routine_ptr*/) {
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
   if (!socket || !buffers || !num_bytes_recv_ptr || !flags_ptr) {
@@ -523,7 +524,6 @@ dword_result_t NetDll_WSARecvFrom_entry(
     return -1;
   }
 
-
   // Hand straight to XSocket’s FSM-aware WSA path.
   // Check the ring buffer first
   uint32_t total_cap = 0;
@@ -531,13 +531,13 @@ dword_result_t NetDll_WSARecvFrom_entry(
 
   sockaddr sa{};
   int salen = sizeof(sockaddr);
-  uint8_t* first_buf =
-      reinterpret_cast<uint8_t*>(
-          kernel_state()->memory()->TranslateVirtual(buffers[0].buf_ptr));
+  uint8_t* first_buf = reinterpret_cast<uint8_t*>(
+      kernel_state()->memory()->TranslateVirtual(buffers[0].buf_ptr));
   uint32_t got = 0;
 
   if (socket->TryDequeueRecv_(first_buf, buffers[0].len, &got,
-                              from_ptr ? &sa : nullptr, from_ptr ? &salen : nullptr)) {
+                              from_ptr ? &sa : nullptr,
+                              from_ptr ? &salen : nullptr)) {
     // Copy into multiple buffers if needed.
     if (got > buffers[0].len) {
       uint32_t off = buffers[0].len;
@@ -570,8 +570,9 @@ dword_result_t NetDll_WSARecvFrom_entry(
   }
 
   // Proceed with the normal path if the ring buffer is empty
-  int ret = socket->WSARecvFrom(buffers, num_buffers, num_bytes_recv_ptr,
-                                flags_ptr, from_ptr, fromlen_ptr, overlapped_ptr);
+  int ret =
+      socket->WSARecvFrom(buffers, num_buffers, num_bytes_recv_ptr, flags_ptr,
+                          from_ptr, fromlen_ptr, overlapped_ptr);
 
   if (ret < 0) {
     auto err = socket->GetLastWSAError();
@@ -615,7 +616,8 @@ dword_result_t NetDll_WSAGetOverlappedResult_entry(
   }
 
   // Check the ring buffer first
-  if (socket->TryDequeueRecv_(nullptr, 0, bytes_transferred, nullptr, nullptr)) {
+  if (socket->TryDequeueRecv_(nullptr, 0, bytes_transferred, nullptr,
+                              nullptr)) {
     *flags_ptr = 0;
     return true;
   }
@@ -648,7 +650,6 @@ dword_result_t NetDll_WSASendTo_entry(
     XThread::SetLastError(uint32_t(X_WSAError::X_WSA_INVALID_PARAMETER));
     return -1;
   }
-
 
   // Always go through XSocket’s WSA path — it prefers the FSM send ring and
   // completes overlapped immediately when enqueued.
