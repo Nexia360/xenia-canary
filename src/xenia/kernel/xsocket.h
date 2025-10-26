@@ -165,6 +165,7 @@ class XSocket : public XObject {
                 XSOCKADDR_IN* to_ptr, uint32_t to_len,
                 XWSAOVERLAPPED* overlapped_ptr);
 
+  void SetRecvCallback(std::function<void(const uint8_t*, uint32_t, const sockaddr*, int)> callback);
   int WSARecvFrom(XWSABUF* buffers, uint32_t num_buffers,
                   xe::be<uint32_t>* num_bytes_recv_ptr,
                   xe::be<uint32_t>* flags_ptr, XSOCKADDR_IN* from_ptr,

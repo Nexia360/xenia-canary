@@ -31,6 +31,10 @@ static std::mutex g_fsm_tasks_mtx;
 static std::unordered_map<XSocket*, std::future<void>> g_fsm_tasks;
 // ==============================================================================
 
+void XSocket::SetRecvCallback(std::function<void(const uint8_t*, uint32_t, const sockaddr*, int)> callback) {
+  recv_callback_ = std::move(callback);
+}
+
 XSocket::XSocket(KernelState* kernel_state)
     : XObject(kernel_state, kObjectType) {}
 
@@ -285,7 +289,14 @@ object_ref<XSocket> XSocket::Accept(XSOCKADDR_IN* name, int* name_len) {
 int XSocket::Shutdown(int how) { return shutdown(native_handle_, how); }
 
 int XSocket::Recv(uint8_t* buf, uint32_t buf_len, uint32_t flags) {
-  return recv(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags);
+  int ret = recv(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags);
+  if (ret > 0 && recv_callback_) {
+    sockaddr addr;
+    int addrlen = sizeof(addr);
+    getpeername(native_handle_, &addr, &addrlen);
+    recv_callback_(buf, ret, &addr, addrlen);
+  }
+  return ret;
 }
 
 int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags,

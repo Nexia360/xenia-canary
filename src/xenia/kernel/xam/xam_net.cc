@@ -525,6 +525,51 @@ dword_result_t NetDll_WSARecvFrom_entry(
 
 
   // Hand straight to XSocket’s FSM-aware WSA path.
+  // Check the ring buffer first
+  uint32_t total_cap = 0;
+  for (uint32_t i = 0; i < num_buffers; ++i) total_cap += buffers[i].len;
+
+  sockaddr sa{};
+  int salen = sizeof(sockaddr);
+  uint8_t* first_buf =
+      reinterpret_cast<uint8_t*>(
+          kernel_state()->memory()->TranslateVirtual(buffers[0].buf_ptr));
+  uint32_t got = 0;
+
+  if (socket->TryDequeueRecv_(first_buf, buffers[0].len, &got,
+                              from_ptr ? &sa : nullptr, from_ptr ? &salen : nullptr)) {
+    // Copy into multiple buffers if needed.
+    if (got > buffers[0].len) {
+      uint32_t off = buffers[0].len;
+      for (uint32_t i = 1; i < num_buffers && off < got; ++i) {
+        uint8_t* dst = reinterpret_cast<uint8_t*>(
+            kernel_state()->memory()->TranslateVirtual(buffers[i].buf_ptr));
+        uint32_t n = std::min<uint32_t>(buffers[i].len, got - off);
+        std::memcpy(dst, first_buf + off, n);
+        off += n;
+      }
+    }
+
+    if (from_ptr) {
+      from_ptr->to_guest(&sa);
+      if (fromlen_ptr) *fromlen_ptr = salen;
+    }
+
+    if (num_bytes_recv_ptr) *num_bytes_recv_ptr = got;
+    if (overlapped_ptr) {
+      overlapped_ptr->internal = got;
+      overlapped_ptr->internal_high = 0;
+      overlapped_ptr->offset_high |= WSAInfo::complete;
+      overlapped_ptr->offset = *flags_ptr;
+      if (overlapped_ptr->event_handle) {
+        xboxkrnl::xeNtSetEvent(overlapped_ptr->event_handle, nullptr);
+      }
+    }
+    XThread::SetLastError((X_WSAError)0);
+    return 0;  // immediate success
+  }
+
+  // Proceed with the normal path if the ring buffer is empty
   int ret = socket->WSARecvFrom(buffers, num_buffers, num_bytes_recv_ptr,
                                 flags_ptr, from_ptr, fromlen_ptr, overlapped_ptr);
 
@@ -569,6 +614,13 @@ dword_result_t NetDll_WSAGetOverlappedResult_entry(
     return 0;
   }
 
+  // Check the ring buffer first
+  if (socket->TryDequeueRecv_(nullptr, 0, bytes_transferred, nullptr, nullptr)) {
+    *flags_ptr = 0;
+    return true;
+  }
+
+  // Proceed with the normal path if the ring buffer is empty
   bool ret = socket->WSAGetOverlappedResult(overlapped_ptr, bytes_transferred,
                                             wait, flags_ptr);
   if (!ret) {
