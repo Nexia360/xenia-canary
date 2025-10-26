@@ -535,7 +535,7 @@ dword_result_t NetDll_WSARecvFrom_entry(
       kernel_state()->memory()->TranslateVirtual(buffers[0].buf_ptr));
   uint32_t got = 0;
 
-  if (socket->TryDequeueRecv_(first_buf, buffers[0].len, got.host_address(),
+  if (socket->TryDequeueRecv_(first_buf, buffers[0].len, &got,
                               from_ptr ? &sa : nullptr,
                               from_ptr ? &salen : nullptr)) {
     // Copy into multiple buffers if needed.
@@ -551,7 +551,7 @@ dword_result_t NetDll_WSARecvFrom_entry(
     }
 
     if (from_ptr) {
-      from_ptr->to_guest(&sa);
+      from_ptr->to_guest(reinterpret_cast<const sockaddr_in*>(&sa));
       if (fromlen_ptr) *fromlen_ptr = salen;
     }
 

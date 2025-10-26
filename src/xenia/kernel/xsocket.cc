@@ -224,7 +224,8 @@ X_STATUS XSocket::Connect(const XSOCKADDR_IN* name, int name_len) {
   sa_in.address_port =
       XLiveAPI::upnp_handler->GetMappedConnectPort(name->address_port);
 
-  sockaddr addr = sa_in.to_host();
+  sockaddr_in addr_in = sa_in.to_host();
+  sockaddr addr = *reinterpret_cast<sockaddr*>(&addr_in);
 
   int ret = connect(native_handle_, &addr, name_len);
   if (ret < 0) {
@@ -274,7 +275,8 @@ X_STATUS XSocket::Listen(int backlog) {
 }
 
 object_ref<XSocket> XSocket::Accept(XSOCKADDR_IN* name, int* name_len) {
-  sockaddr sa = {};
+  sockaddr_in sa_in = {};
+  sockaddr sa = *reinterpret_cast<sockaddr*>(&sa_in);
   int addrlen = 0;
   const bool is_name_and_name_len_available = name && name_len;
 
@@ -289,7 +291,7 @@ object_ref<XSocket> XSocket::Accept(XSOCKADDR_IN* name, int* name_len) {
   }
 
   if (is_name_and_name_len_available) {
-    name->to_guest(&sa);
+    name->to_guest(reinterpret_cast<const sockaddr_in*>(&sa));
     *name_len = byte_swap(addrlen);
   }
 
