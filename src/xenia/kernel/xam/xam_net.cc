@@ -513,17 +513,22 @@ dword_result_t NetDll_WSARecvFrom_entry(
     pointer_t<XWSAOVERLAPPED> overlapped_ptr, lpvoid_t /*completion_routine_ptr*/) {
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
-  if (!socket) {
-    XThread::SetLastError(uint32_t(X_WSAError::X_WSAENOTSOCK));
+  if (!socket || !buffers || !num_bytes_recv_ptr || !flags_ptr) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSA_INVALID_PARAMETER));
     return -1;
   }
 
-#ifdef XE_PLATFORM_WIN32
+  if (from_ptr && !fromlen_ptr) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSA_INVALID_PARAMETER));
+    return -1;
+  }
+
+  #ifdef XE_PLATFORM_WIN32
   // Keep UDP recv from dying on ICMP Port Unreachable while we’re in local modes.
   if (cvars::network_mode >= 2) {
     DisableUdpConnReset(socket->native_handle());
   }
-#endif
+  #endif
 
   // Hand straight to XSocket’s FSM-aware WSA path.
   int ret = socket->WSARecvFrom(buffers, num_buffers, num_bytes_recv_ptr,
@@ -588,17 +593,22 @@ dword_result_t NetDll_WSASendTo_entry(
     pointer_t<XWSAOVERLAPPED> overlapped, lpvoid_t /*completion_routine*/) {
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
-  if (!socket) {
-    XThread::SetLastError(uint32_t(X_WSAError::X_WSAENOTSOCK));
+  if (!socket || !buffers || !num_bytes_sent) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSA_INVALID_PARAMETER));
     return -1;
   }
 
-#ifdef XE_PLATFORM_WIN32
+  if (to_ptr && to_len < sizeof(XSOCKADDR_IN)) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSA_INVALID_PARAMETER));
+    return -1;
+  }
+
+  #ifdef XE_PLATFORM_WIN32
   // Avoid UDP connreset surprises on local UDP flows.
   if (cvars::network_mode >= 2) {
     DisableUdpConnReset(socket->native_handle());
   }
-#endif
+  #endif
 
   // Always go through XSocket’s WSA path — it prefers the FSM send ring and
   // completes overlapped immediately when enqueued.
