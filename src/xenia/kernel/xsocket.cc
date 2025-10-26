@@ -24,15 +24,18 @@ using namespace std::chrono_literals;
 namespace xe {
 namespace kernel {
 
-// ====================== Local statics for FSM task management =================
-// We keep the async FSM future entirely within this .cc file so we don't need
-// to change the header. Keyed by the socket instance pointer.
+// ====================== Local statics for FSM task management
+// ================= We keep the async FSM future entirely within this .cc file
+// so we don't need to change the header. Keyed by the socket instance pointer.
 static std::mutex g_fsm_tasks_mtx;
 static std::unordered_map<XSocket*, std::future<void>> g_fsm_tasks;
 // ==============================================================================
 
-void XSocket::SetRecvCallback(std::function<void(const uint8_t*, uint32_t, const sockaddr*, int)> callback) {
-  recv_callback_ = [this](const uint8_t* data, uint32_t length, const sockaddr* addr, int addrlen) {
+void XSocket::SetRecvCallback(
+    std::function<void(const uint8_t*, uint32_t, const sockaddr*, int)>
+        callback) {
+  recv_callback_ = [this](const uint8_t* data, uint32_t length,
+                          const sockaddr* addr, int addrlen) {
     NetPacket pkt{};
     pkt.len = static_cast<uint16_t>(length);
     std::memcpy(pkt.data, data, length);
@@ -69,11 +72,13 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
 
   // Set the receive buffer size to 1MB
   int recv_buf_size = 1024 * 1024;
-  setsockopt(native_handle_, SOL_SOCKET, SO_RCVBUF, (const char*)&recv_buf_size, sizeof(recv_buf_size));
+  setsockopt(native_handle_, SOL_SOCKET, SO_RCVBUF, (const char*)&recv_buf_size,
+             sizeof(recv_buf_size));
 
   // Set the send buffer size to 1MB
   int send_buf_size = 1024 * 1024;
-  setsockopt(native_handle_, SOL_SOCKET, SO_SNDBUF, (const char*)&send_buf_size, sizeof(send_buf_size));
+  setsockopt(native_handle_, SOL_SOCKET, SO_SNDBUF, (const char*)&send_buf_size,
+             sizeof(send_buf_size));
 
   return X_STATUS_SUCCESS;
 }
@@ -90,7 +95,8 @@ X_STATUS XSocket::Close() {
   {
     std::unique_lock receive_lock(receive_mutex_);
     if (receive_active_overlapped_ &&
-        !(receive_active_overlapped_->offset_high & (uint32_t)WSAInfo::complete)) {
+        !(receive_active_overlapped_->offset_high &
+          (uint32_t)WSAInfo::complete)) {
       receive_active_overlapped_->offset_high |= (uint32_t)WSAInfo::closed;
     }
   }
@@ -568,8 +574,7 @@ int XSocket::WSASendTo(XWSABUF* buffers, uint32_t num_buffers,
     auto wsa_error = send_async_data.overlapped->internal_high.get();
     SetLastWSAError((X_WSAError)wsa_error);
 
-    if (overlapped_ptr &&
-        wsa_error == (uint32_t)X_WSAError::X_WSAEWOULDBLOCK) {
+    if (overlapped_ptr && wsa_error == (uint32_t)X_WSAError::X_WSAEWOULDBLOCK) {
       std::lock_guard<std::mutex> lk(send_mutex_);
 
       if (!send_active_overlapped_ ||
@@ -673,9 +678,9 @@ int XSocket::PushWSASendTo(bool wait, WSASendToData send_async_data) {
       case WSAENOTCONN:
       case WSAESHUTDOWN:
       case WSAETIMEDOUT:
-        XELOGE("WSASendTo failed with UDP-specific error {}",
-               static_cast<uint32_t>(
-                   send_async_data.overlapped->internal_high));
+        XELOGE(
+            "WSASendTo failed with UDP-specific error {}",
+            static_cast<uint32_t>(send_async_data.overlapped->internal_high));
         break;
       default:
         send_async_data.overlapped->internal_high = 0;
@@ -728,13 +733,12 @@ int XSocket::WSARecvFrom(XWSABUF* buffers, uint32_t num_buffers,
 
   sockaddr sa{};
   int salen = sizeof(sockaddr);
-  uint8_t* first_buf =
-      reinterpret_cast<uint8_t*>(
-          kernel_state()->memory()->TranslateVirtual(buffers[0].buf_ptr));
+  uint8_t* first_buf = reinterpret_cast<uint8_t*>(
+      kernel_state()->memory()->TranslateVirtual(buffers[0].buf_ptr));
   uint32_t got = 0;
 
-  if (TryDequeueRecv_(first_buf, buffers[0].len, &got,
-                      from_ptr ? &sa : nullptr, from_ptr ? &salen : nullptr)) {
+  if (TryDequeueRecv_(first_buf, buffers[0].len, &got, from_ptr ? &sa : nullptr,
+                      from_ptr ? &salen : nullptr)) {
     // Copy into multiple buffers if needed.
     if (got > buffers[0].len) {
       uint32_t off = buffers[0].len;
@@ -772,13 +776,12 @@ int XSocket::WSARecvFrom(XWSABUF* buffers, uint32_t num_buffers,
 
   sockaddr sa{};
   int salen = sizeof(sockaddr);
-  uint8_t* first_buf =
-      reinterpret_cast<uint8_t*>(
-          kernel_state()->memory()->TranslateVirtual(buffers[0].buf_ptr));
+  uint8_t* first_buf = reinterpret_cast<uint8_t*>(
+      kernel_state()->memory()->TranslateVirtual(buffers[0].buf_ptr));
   uint32_t got = 0;
 
-  if (TryDequeueRecv_(first_buf, buffers[0].len, &got,
-                      from_ptr ? &sa : nullptr, from_ptr ? &salen : nullptr)) {
+  if (TryDequeueRecv_(first_buf, buffers[0].len, &got, from_ptr ? &sa : nullptr,
+                      from_ptr ? &salen : nullptr)) {
     // Copy into multiple buffers if needed.
     if (got > buffers[0].len) {
       uint32_t off = buffers[0].len;
@@ -834,8 +837,7 @@ int XSocket::WSARecvFrom(XWSABUF* buffers, uint32_t num_buffers,
     auto wsa_error = receive_async_data.overlapped->internal_high.get();
     SetLastWSAError((X_WSAError)wsa_error);
 
-    if (overlapped_ptr &&
-        wsa_error == (uint32_t)X_WSAError::X_WSAEWOULDBLOCK) {
+    if (overlapped_ptr && wsa_error == (uint32_t)X_WSAError::X_WSAEWOULDBLOCK) {
       std::lock_guard<std::mutex> lk(receive_mutex_);
 
       if (!receive_active_overlapped_ ||
