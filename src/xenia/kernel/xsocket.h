@@ -301,11 +301,14 @@ class XSocket : public XObject {
   void FsmDoNetRecv_();
   void FsmDoNetSend_();
 
+ public:
+  bool TryDequeueRecv_(uint8_t* buf, uint32_t buf_len, uint32_t* out_len,
+                       sockaddr* out_addr, int* out_addrlen);
+
+ private:
   // Client<->FSM helpers
   bool TryEnqueueSend_(const uint8_t* buf, uint32_t len, const sockaddr* addr,
                        int addrlen);
-  bool TryDequeueRecv_(uint8_t* buf, uint32_t buf_len, uint32_t* out_len,
-                       sockaddr* out_addr, int* out_addrlen);
   // =========================================================================
 
   int PushWSASendTo(bool wait, struct WSASendToData send_async_data);
