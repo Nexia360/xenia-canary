@@ -54,6 +54,14 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
     return X_STATUS_UNSUCCESSFUL;
   }
 
+  // Set the receive buffer size to 1MB
+  int recv_buf_size = 1024 * 1024;
+  setsockopt(native_handle_, SOL_SOCKET, SO_RCVBUF, (const char*)&recv_buf_size, sizeof(recv_buf_size));
+
+  // Set the send buffer size to 1MB
+  int send_buf_size = 1024 * 1024;
+  setsockopt(native_handle_, SOL_SOCKET, SO_SNDBUF, (const char*)&send_buf_size, sizeof(send_buf_size));
+
   return X_STATUS_SUCCESS;
 }
 
