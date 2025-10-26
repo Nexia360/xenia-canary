@@ -535,7 +535,7 @@ dword_result_t NetDll_WSARecvFrom_entry(
       kernel_state()->memory()->TranslateVirtual(buffers[0].buf_ptr));
   uint32_t got = 0;
 
-  if (socket->TryDequeueRecv_(first_buf, buffers[0].len, &got,
+  if (socket->TryDequeueRecv_(first_buf, buffers[0].len, got.host_address(),
                               from_ptr ? &sa : nullptr,
                               from_ptr ? &salen : nullptr)) {
     // Copy into multiple buffers if needed.
@@ -559,13 +559,13 @@ dword_result_t NetDll_WSARecvFrom_entry(
     if (overlapped_ptr) {
       overlapped_ptr->internal = got;
       overlapped_ptr->internal_high = 0;
-      overlapped_ptr->offset_high |= WSAInfo::complete;
+      overlapped_ptr->offset_high |= xe::kernel::XSocket::WSAInfo::complete;
       overlapped_ptr->offset = *flags_ptr;
       if (overlapped_ptr->event_handle) {
         xboxkrnl::xeNtSetEvent(overlapped_ptr->event_handle, nullptr);
       }
     }
-    XThread::SetLastError((X_WSAError)0);
+    XThread::SetLastError(static_cast<uint32_t>(X_WSAError::X_WSA_IO_PENDING));
     return 0;  // immediate success
   }
 
