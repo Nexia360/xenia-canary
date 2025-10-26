@@ -523,12 +523,6 @@ dword_result_t NetDll_WSARecvFrom_entry(
     return -1;
   }
 
-  #ifdef XE_PLATFORM_WIN32
-  // Keep UDP recv from dying on ICMP Port Unreachable while we’re in local modes.
-  if (cvars::network_mode >= 2) {
-    DisableUdpConnReset(socket->native_handle());
-  }
-  #endif
 
   // Hand straight to XSocket’s FSM-aware WSA path.
   int ret = socket->WSARecvFrom(buffers, num_buffers, num_bytes_recv_ptr,
@@ -603,12 +597,6 @@ dword_result_t NetDll_WSASendTo_entry(
     return -1;
   }
 
-  #ifdef XE_PLATFORM_WIN32
-  // Avoid UDP connreset surprises on local UDP flows.
-  if (cvars::network_mode >= 2) {
-    DisableUdpConnReset(socket->native_handle());
-  }
-  #endif
 
   // Always go through XSocket’s WSA path — it prefers the FSM send ring and
   // completes overlapped immediately when enqueued.
