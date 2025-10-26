@@ -224,7 +224,8 @@ class XSocket : public XObject {
   XWSAOVERLAPPED* send_active_overlapped_ = nullptr;
 
   std::future<int> polling_task_;
-  std::function<void(const uint8_t*, uint32_t, const sockaddr*, int)> recv_callback_;
+  std::function<void(const uint8_t*, uint32_t, const sockaddr*, int)>
+      recv_callback_;
 
   std::mutex receive_mutex_;
   std::condition_variable receive_cv_;
