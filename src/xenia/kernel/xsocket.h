@@ -67,17 +67,20 @@ struct XSOCKADDR_IN {
   in_addr address_ip;
   char sa_zero[8];
 
-  const sockaddr to_host() const {
-    sockaddr sa = {};
-    std::memcpy(&sa, this, sizeof(sockaddr));
-    sa.sa_family = xe::byte_swap(sa.sa_family);
-    // port is already in correct endianness
+  sockaddr_in to_host() const {
+    sockaddr_in sa = {};
+    sa.sin_family = xe::byte_swap(address_family);
+    sa.sin_port = address_port;
+    sa.sin_addr = address_ip;
+    std::memcpy(sa.sin_zero, sa_zero, sizeof(sa_zero));
     return sa;
   }
 
-  void to_guest(const sockaddr* host) {
-    std::memcpy(this, host, sizeof(sockaddr));
-    address_family = host->sa_family;
+  void to_guest(const sockaddr_in* host) {
+    address_family = xe::byte_swap(host->sin_family);
+    address_port = host->sin_port;
+    address_ip = host->sin_addr;
+    std::memcpy(sa_zero, host->sin_zero, sizeof(sa_zero));
   }
 };
 
